@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:video_player/video_player.dart';
+import 'package:youtube_player_iframe/youtube_player_iframe.dart';
 import '../models/comment_model.dart';
 import '../models/stream_info.dart';
 import '../models/video_model.dart';
@@ -38,7 +38,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   final PipedApiService _api = PipedApiService();
 
   late String _currentVideoId;
-  VideoPlayerController? _playerController;
+  YoutubePlayerController? _ytController;
+  StreamSubscription<YoutubeVideoState>? _ytVideoStateSub;
+  StreamSubscription<YoutubePlayerValue>? _ytPlayerStateSub;
+  double _mobilePosition = 0.0;
+  bool _isMobileMuted = false;
+
   StreamInfo? _streamInfo;
   bool _isLoadingInfo = true;
   String? _errorMessage;
@@ -58,6 +63,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
   List<VideoModel> _relatedVideos = [];
   bool _isLoadingRelated = true;
 
+  double get _streamDuration {
+    if (!kIsWeb && _ytController != null) {
+      final d = _ytController!.metadata.duration.inSeconds.toDouble();
+      if (d > 0) return d;
+    }
+    final dur = (widget.initialVideo?.duration ?? 0) > 0
+        ? widget.initialVideo!.duration!.toDouble()
+        : 120.0;
+    return dur;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -70,7 +86,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   void dispose() {
     _hideControlsTimer?.cancel();
-    _playerController?.dispose();
+    _ytVideoStateSub?.cancel();
+    _ytPlayerStateSub?.cancel();
+    _ytController?.close();
     super.dispose();
   }
 
@@ -104,6 +122,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _relatedVideos = [];
       _isLoadingComments = true;
       _isLoadingRelated = true;
+      _mobilePosition = 0.0;
+      _dragValue = -1.0;
       if (widget.initialVideo != null) {
         _streamInfo = StreamInfo(
           id: widget.initialVideo!.id,
@@ -132,9 +152,40 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
     });
 
-    await _playerController?.pause();
-    _playerController?.dispose();
-    _playerController = null;
+    if (!kIsWeb) {
+      _ytVideoStateSub?.cancel();
+      _ytPlayerStateSub?.cancel();
+      await _ytController?.close();
+      _ytController = null;
+
+      final controller = YoutubePlayerController.fromVideoId(
+        videoId: videoId,
+        autoPlay: true,
+        params: const YoutubePlayerParams(
+          showControls: false,
+          showFullscreenButton: false,
+          mute: false,
+          enableCaption: true,
+          strictRelatedVideos: true,
+        ),
+      );
+
+      _ytController = controller;
+
+      _ytVideoStateSub = controller.videoStateStream.listen((state) {
+        if (mounted && _dragValue < 0) {
+          setState(() {
+            _mobilePosition = state.position.inSeconds.toDouble();
+          });
+        }
+      });
+
+      _ytPlayerStateSub = controller.stream.listen((val) {
+        if (mounted) {
+          setState(() {});
+        }
+      });
+    }
 
     // Asynchronously fetch comments and related videos
     _loadComments(videoId);
@@ -158,24 +209,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
       } else {
         _loadRelated(videoId, info.title);
       }
-
-      if (!kIsWeb) {
-        final playUrl = info.bestPlayableUrl;
-        if (playUrl != null && playUrl.isNotEmpty) {
-          _initPlayer(playUrl);
-        } else {
-          setState(() {
-            _errorMessage = "No playable stream URL found for this video.";
-          });
-        }
-      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _isLoadingInfo = false;
-        if (_streamInfo == null) {
-          _errorMessage = e.toString();
-        }
       });
     }
   }
@@ -240,54 +277,29 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
   }
 
-  Future<void> _initPlayer(String streamUrl) async {
-    try {
-      final controller = VideoPlayerController.networkUrl(
-        Uri.parse(streamUrl),
-        httpHeaders: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        },
-      );
-
-      await controller.initialize();
-      if (!mounted) {
-        controller.dispose();
-        return;
-      }
-
-      setState(() {
-        _playerController = controller;
-      });
-
-      controller.addListener(() {
-        if (mounted) setState(() {});
-      });
-
-      await controller.play();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _errorMessage = "Video playback failed: $e";
-      });
-    }
-  }
-
   void _handleSeekRelative(int seconds) {
     _startHideControlsTimer();
     if (kIsWeb) {
       sendWebSeek(_currentVideoId, seconds);
-    } else if (_playerController != null) {
-      final cur = _playerController!.value.position;
-      final target = cur + Duration(seconds: seconds);
-      _playerController!.seekTo(target);
+    } else if (_ytController != null) {
+      final cur = _mobilePosition;
+      final dur = _streamDuration;
+      final target = (cur + seconds).clamp(0.0, dur);
+      _ytController!.seekTo(seconds: target, allowSeekAhead: true);
+      setState(() {
+        _mobilePosition = target;
+      });
     }
   }
 
   void _handleSeekTo(double seconds) {
     if (kIsWeb) {
       sendWebSeekTo(_currentVideoId, seconds);
-    } else if (_playerController != null) {
-      _playerController!.seekTo(Duration(seconds: seconds.toInt()));
+    } else if (_ytController != null) {
+      _ytController!.seekTo(seconds: seconds, allowSeekAhead: true);
+      setState(() {
+        _mobilePosition = seconds;
+      });
     }
     _startHideControlsTimer();
   }
@@ -296,11 +308,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _startHideControlsTimer();
     if (kIsWeb) {
       sendWebPlayPause(_currentVideoId);
-    } else if (_playerController != null) {
-      if (_playerController!.value.isPlaying) {
-        _playerController!.pause();
+    } else if (_ytController != null) {
+      if (_ytController!.value.playerState == PlayerState.playing) {
+        _ytController!.pauseVideo();
       } else {
-        _playerController!.play();
+        _ytController!.playVideo();
       }
       setState(() {});
     }
@@ -313,22 +325,29 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (kIsWeb) {
       sendWebSpeed(_currentVideoId, speed);
     } else {
-      _playerController?.setPlaybackSpeed(speed);
+      _ytController?.setPlaybackRate(speed);
     }
   }
 
   void _handleToggleMute(bool isCurrentlyMuted) {
     if (kIsWeb) {
       sendWebToggleMute(_currentVideoId);
-    } else if (_playerController != null) {
-      _playerController!.setVolume(isCurrentlyMuted ? 1.0 : 0.0);
-      setState(() {});
+    } else if (_ytController != null) {
+      if (isCurrentlyMuted) {
+        _ytController!.unMute();
+        setState(() => _isMobileMuted = false);
+      } else {
+        _ytController!.mute();
+        setState(() => _isMobileMuted = true);
+      }
     }
   }
 
   void _handleFullscreen() {
     if (kIsWeb) {
       sendWebFullscreen(_currentVideoId);
+    } else if (_ytController != null) {
+      _ytController!.toggleFullScreen();
     }
   }
 
@@ -456,7 +475,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     onChanged: (val) {
                       setSheetState(() => _isLooping = val);
                       setState(() => _isLooping = val);
-                      _playerController?.setLooping(val);
+                      _ytController?.setLoop(loopPlaylists: val);
                     },
                   ),
                   const SizedBox(height: 12),
@@ -734,11 +753,52 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      // Base Player (Web IFrame or Native VideoPlayer)
+                      // Base Player (Web IFrame or Mobile YoutubePlayer)
                       if (kIsWeb)
                         getPlatformWebPlayer(_currentVideoId)
-                      else if (_playerController != null && _playerController!.value.isInitialized)
-                        VideoPlayer(_playerController!)
+                      else if (_ytController != null)
+                        YoutubePlayer(
+                          controller: _ytController!,
+                          aspectRatio: 16 / 9,
+                          controlsBuilder: (context, isFullscreen) {
+                            return Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                // Gesture Layer for tap-to-toggle overlay
+                                Positioned.fill(
+                                  child: GestureDetector(
+                                    behavior: HitTestBehavior.translucent,
+                                    onTap: _toggleControlsVisibility,
+                                  ),
+                                ),
+
+                                // Thin Red Progress Line when overlay is hidden (Official YouTube UI)
+                                if (!_showControls)
+                                  Positioned(
+                                    left: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                    child: LinearProgressIndicator(
+                                      value: (_mobilePosition / _streamDuration).clamp(0.0, 1.0),
+                                      backgroundColor: Colors.transparent,
+                                      valueColor: const AlwaysStoppedAnimation<Color>(YouTubeTheme.ytRed),
+                                      minHeight: 2.5,
+                                    ),
+                                  ),
+
+                                // 1:1 Modern YouTube Player Controls Overlay
+                                if (_showControls)
+                                  _buildYouTubeOverlay(
+                                    currentTime: _dragValue >= 0 ? _dragValue : _mobilePosition,
+                                    duration: _streamDuration,
+                                    isPlaying: _ytController?.value.playerState == PlayerState.playing,
+                                    isMuted: _isMobileMuted,
+                                    isFullscreen: isFullscreen,
+                                  ),
+                              ],
+                            );
+                          },
+                        )
                       else if (_isLoadingInfo)
                         const Center(
                           child: CircularProgressIndicator(color: YouTubeTheme.ytRed, strokeWidth: 2.5),
@@ -771,84 +831,60 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           child: CircularProgressIndicator(color: YouTubeTheme.ytRed, strokeWidth: 2.5),
                         ),
 
-                      // Gesture Layer for tap-to-toggle overlay
-                      Positioned.fill(
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.translucent,
-                          onTap: _toggleControlsVisibility,
-                        ),
-                      ),
-
-                      // Thin Red Progress Line when overlay is hidden (Official YouTube UI)
-                      if (!_showControls)
-                        Positioned(
-                          left: 0,
-                          right: 0,
-                          bottom: 0,
-                          child: kIsWeb
-                              ? ValueListenableBuilder<WebPlayerInfo>(
-                                  valueListenable: getPlatformPlayerNotifier(),
-                                  builder: (context, webInfo, _) {
-                                    final dur = webInfo.duration > 0
-                                        ? webInfo.duration
-                                        : (widget.initialVideo?.duration?.toDouble() ?? 120.0);
-                                    final frac = (webInfo.currentTime / dur).clamp(0.0, 1.0);
-                                    return LinearProgressIndicator(
-                                      value: frac,
-                                      backgroundColor: Colors.transparent,
-                                      valueColor: const AlwaysStoppedAnimation<Color>(YouTubeTheme.ytRed),
-                                      minHeight: 2.5,
-                                    );
-                                  },
-                                )
-                              : ValueListenableBuilder<VideoPlayerValue>(
-                                  valueListenable: _playerController ??
-                                      ValueNotifier(const VideoPlayerValue(duration: Duration.zero)),
-                                  builder: (context, val, _) {
-                                    final dur = val.duration.inMilliseconds > 0
-                                        ? val.duration.inMilliseconds.toDouble()
-                                        : 1.0;
-                                    final frac = (val.position.inMilliseconds / dur).clamp(0.0, 1.0);
-                                    return LinearProgressIndicator(
-                                      value: frac,
-                                      backgroundColor: Colors.transparent,
-                                      valueColor: const AlwaysStoppedAnimation<Color>(YouTubeTheme.ytRed),
-                                      minHeight: 2.5,
-                                    );
-                                  },
-                                ),
+                      // Overlay for Web only
+                      if (kIsWeb) ...[
+                        // Gesture Layer for tap-to-toggle overlay on Web
+                        Positioned.fill(
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.translucent,
+                            onTap: _toggleControlsVisibility,
+                          ),
                         ),
 
-                      // 1:1 Modern YouTube Player Controls Overlay
-                      if (_showControls)
-                        kIsWeb
-                            ? ValueListenableBuilder<WebPlayerInfo>(
-                                valueListenable: getPlatformPlayerNotifier(),
-                                builder: (context, webInfo, _) {
-                                  final curSeconds = _dragValue >= 0 ? _dragValue : webInfo.currentTime;
-                                  final durSeconds = webInfo.duration > 0
-                                      ? webInfo.duration
-                                      : (widget.initialVideo?.duration?.toDouble() ?? 120.0);
-                                  final isPlaying = webInfo.isPlaying;
-                                  final isMuted = webInfo.isMuted;
+                        // Thin Red Progress Line when overlay is hidden on Web
+                        if (!_showControls)
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            child: ValueListenableBuilder<WebPlayerInfo>(
+                              valueListenable: getPlatformPlayerNotifier(),
+                              builder: (context, webInfo, _) {
+                                final dur = webInfo.duration > 0
+                                    ? webInfo.duration
+                                    : (widget.initialVideo?.duration?.toDouble() ?? 120.0);
+                                final frac = (webInfo.currentTime / dur).clamp(0.0, 1.0);
+                                return LinearProgressIndicator(
+                                  value: frac,
+                                  backgroundColor: Colors.transparent,
+                                  valueColor: const AlwaysStoppedAnimation<Color>(YouTubeTheme.ytRed),
+                                  minHeight: 2.5,
+                                );
+                              },
+                            ),
+                          ),
 
-                                  return _buildYouTubeOverlay(
-                                    currentTime: curSeconds,
-                                    duration: durSeconds,
-                                    isPlaying: isPlaying,
-                                    isMuted: isMuted,
-                                  );
-                                },
-                              )
-                            : _buildYouTubeOverlay(
-                                currentTime: _dragValue >= 0
-                                    ? _dragValue
-                                    : (_playerController?.value.position.inSeconds.toDouble() ?? 0.0),
-                                duration: _playerController?.value.duration.inSeconds.toDouble() ??
-                                    (widget.initialVideo?.duration?.toDouble() ?? 120.0),
-                                isPlaying: _playerController?.value.isPlaying ?? false,
-                                isMuted: (_playerController?.value.volume ?? 1.0) == 0.0,
-                              ),
+                        // 1:1 Modern YouTube Player Controls Overlay on Web
+                        if (_showControls)
+                          ValueListenableBuilder<WebPlayerInfo>(
+                            valueListenable: getPlatformPlayerNotifier(),
+                            builder: (context, webInfo, _) {
+                              final curSeconds = _dragValue >= 0 ? _dragValue : webInfo.currentTime;
+                              final durSeconds = webInfo.duration > 0
+                                  ? webInfo.duration
+                                  : (widget.initialVideo?.duration?.toDouble() ?? 120.0);
+                              final isPlaying = webInfo.isPlaying;
+                              final isMuted = webInfo.isMuted;
+
+                              return _buildYouTubeOverlay(
+                                currentTime: curSeconds,
+                                duration: durSeconds,
+                                isPlaying: isPlaying,
+                                isMuted: isMuted,
+                              );
+                            },
+                          ),
+                      ],
                     ],
                   ),
                 ),
@@ -1220,6 +1256,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     required double duration,
     required bool isPlaying,
     required bool isMuted,
+    bool isFullscreen = false,
   }) {
     final maxDur = duration > 0 ? duration : 1.0;
     final curPos = currentTime.clamp(0.0, maxDur);
@@ -1388,8 +1425,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     ),
                     const Spacer(),
                     IconButton(
-                      icon: const Icon(Icons.fullscreen, color: Colors.white, size: 20),
-                      tooltip: 'Fullscreen',
+                      icon: Icon(
+                        isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                      tooltip: isFullscreen ? 'Exit Fullscreen' : 'Fullscreen',
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                       onPressed: _handleFullscreen,

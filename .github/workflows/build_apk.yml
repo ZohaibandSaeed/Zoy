@@ -1,0 +1,92 @@
+name: Build Android APK (zoy)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+jobs:
+  build-apk:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout repository code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Setup Java 17 for Gradle
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      # 3. Setup Flutter Environment
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      # 4. Prepare .env configuration file
+      - name: Prepare .env configuration
+        run: |
+          if [ -f .env.example ]; then
+            cp .env.example .env
+          else
+            echo "APP_NAME=zoy" > .env
+            echo "DEFAULT_REGION=PK" >> .env
+            echo "PIPED_PRIMARY_API_URL=https://pipedapi.ducks.party" >> .env
+            echo "PIPED_FALLBACK_API_URL_1=https://api.piped.private.coffee" >> .env
+            echo "PIPED_FALLBACK_API_URL_2=https://pipedapi.ducks.party" >> .env
+          fi
+
+      # 5. Install dependencies
+      - name: Install dependencies
+        run: flutter pub get
+
+      # 6. Verify static analysis
+      - name: Run Flutter analyze
+        run: flutter analyze
+
+      # 7. Run Unit & Smoke Tests
+      - name: Run Tests
+        run: flutter test
+
+      # 8. Build Universal Release APK
+      - name: Build Universal Release APK
+        run: flutter build apk --release
+
+      # 9. Build ABI-split APKs (Smaller file size for modern phones)
+      - name: Build Split per ABI APKs
+        run: flutter build apk --split-per-abi --release
+
+      # 10. Organize APK outputs with clear filenames
+      - name: Organize APK Files
+        run: |
+          mkdir -p release-apks
+          if [ -f build/app/outputs/flutter-apk/app-release.apk ]; then
+            cp build/app/outputs/flutter-apk/app-release.apk release-apks/zoy-universal-release.apk
+          fi
+          if [ -f build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ]; then
+            cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk release-apks/zoy-arm64-v8a-release.apk
+          fi
+          if [ -f build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk ]; then
+            cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk release-apks/zoy-armeabi-v7a-release.apk
+          fi
+
+      # 11. Upload downloadable APK artifacts to GitHub Actions
+      - name: Upload APK Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: zoy-release-apk
+          path: release-apks/*.apk
+          retention-days: 30

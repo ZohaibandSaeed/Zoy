@@ -1,0 +1,116 @@
+================================================================================
+                    ZEETUBE - 8-STEP MASTER ROADMAP (A TO Z)
+             100% YouTube 1:1 UI Clone | Privacy-First (No History)
+================================================================================
+
+PROJECT PHILOSOPHY:
+1. Zero History & Zero Tracking: Koi watch history, search history, ya telemetry save nahi hogi. 100% private.
+2. 1:1 YouTube UI Replica: Color schemes, typography, layout, icons, video player, channel page bilkul original YouTube jaisa lagega.
+3. Pure Flutter Frontend: Koi server/database nahi chalana. Piped API public endpoints + local shared_preferences for subscriptions.
+
+--------------------------------------------------------------------------------
+STEP 1: ARCHITECTURE & YOUTUBE DESIGN SYSTEM SETUP
+--------------------------------------------------------------------------------
+- Folder Structure:
+  * lib/
+    ├── main.dart
+    ├── models/        (video_model.dart, stream_info.dart, channel_model.dart)
+    ├── services/      (piped_api_service.dart, storage_service.dart)
+    ├── providers/     (feed_provider.dart, subscription_provider.dart, player_provider.dart)
+    ├── screens/       (home_screen.dart, player_screen.dart, search_screen.dart, channel_screen.dart, subscriptions_screen.dart, main_nav_screen.dart)
+    ├── widgets/       (video_card.dart, channel_header.dart, player_controls.dart, pill_button.dart, shimmer_loader.dart)
+    └── utils/         (theme.dart, constants.dart, formatters.dart)
+
+- Exact YouTube Dark/Light Theme:
+  * YouTube Dark: Background (#0F0F0F), Surface (#1F1F1F / #272727), Primary Red (#FF0000), White text (#F1F1F1), Subtext (#AAAAAA).
+  * YouTube Top Bar: zeeTube logo (YouTube red play badge + bold typography), Cast icon, Search icon, Settings avatar.
+  * YouTube Bottom Navigation Bar: Home, Subscriptions, Library/Settings.
+
+--------------------------------------------------------------------------------
+STEP 2: PIPED API RESILIENT SERVICE LAYER
+--------------------------------------------------------------------------------
+- Multi-Instance Fallback Mechanism:
+  Agar ek instance busy ho to app automatically doosre par switch ho jaye:
+  1. https://pipedapi.kavin.rocks
+  2. https://api.piped.private.coffee
+  3. https://piped-api.lunar.icu
+- Core Endpoints Integration:
+  * GET /trending?region=US (Home trending feed)
+  * GET /search?q={query}&filter=all (Search videos/channels)
+  * GET /streams/{videoId} (Direct MP4/HLS streaming urls, title, channel info, related videos)
+  * GET /channel/{channelId} (Channel avatar, banner, subscriber count, and latest uploaded videos)
+
+--------------------------------------------------------------------------------
+STEP 3: 100% PRIVACY & LOCAL SUBSCRIPTION ENGINE (ZERO HISTORY)
+--------------------------------------------------------------------------------
+- Strict Privacy Rule:
+  * Koi Watch History database ya cache save NAHI hogi.
+  * Koi Search Query track ya save NAHI hogi.
+- Local Subscriptions Only:
+  * 'shared_preferences' mein sirf user ke manually "Subscribe" kiye hue channels save honge:
+    { "channelId", "channelName", "avatarUrl", "subscribers" }
+  * Zero-Login: User bina kisi Google account ke kisi bhi YouTuber ko Subscribe/Unsubscribe kar sakta hai.
+
+--------------------------------------------------------------------------------
+STEP 4: HOME FEED & EXACT YOUTUBE VIDEO CARD UI
+--------------------------------------------------------------------------------
+- Exact YouTube Video Card Component:
+  * 16:9 high-res thumbnail with rounded duration pill at bottom-right (e.g. "14:20").
+  * Channel circular avatar (tap opens Channel Page).
+  * 2-line title in YouTube typography.
+  * Subtitle text: "Channel Name • 1.2M views • 3 days ago".
+  * 3-dots action menu ("Share", "Not interested").
+- Infinite Scrolling & Skeleton Shimmer loading placeholders.
+
+--------------------------------------------------------------------------------
+STEP 5: YOUTUBE VIDEO PLAYER SCREEN & INTERACTION BAR
+--------------------------------------------------------------------------------
+- Video Player:
+  * Aspect-ratio video player with clean overlay controls (Play/Pause, Seek 10s forward/backward, Fullscreen toggle, Slider scrubber).
+  * Auto-selects optimal MP4 stream (720p/1080p).
+- Video Metadata & Interaction Bar:
+  * Video Title + expand/collapse description.
+  * View count + formatted upload date.
+  * Channel Info Row: Circular avatar, channel title, subscriber count, + YouTube-style "Subscribe" button (Red -> Grey "Subscribed").
+  * Pill-shaped Action Bar:
+    - Like button (visual in-app toggle).
+    - Native Share button ('share_plus' creates genuine https://youtu.be/{videoId} link).
+    - Remix / Download / Copy Link options.
+- Up Next / Related Videos:
+  * YouTube-style list of recommended videos under the player with click-to-play.
+
+--------------------------------------------------------------------------------
+STEP 6: REAL-TIME SEARCH & FILTER SCREEN
+--------------------------------------------------------------------------------
+- Top App Bar with back arrow, YouTube-style search input field, clear 'X' button, and search submit.
+- Search Results:
+  * Channel result cards with big circular avatar & Subscribe button.
+  * Video result cards with thumbnail and details.
+- Filter chips horizontally scrollable: "All", "Videos", "Channels", "Latest".
+
+--------------------------------------------------------------------------------
+STEP 7: CHANNEL PROFILE PAGE & LATEST VIDEOS (`/channel/{channelId}`)
+--------------------------------------------------------------------------------
+- YouTube Channel Page Layout:
+  * Top wide banner image (responsive cover art).
+  * Channel avatar (overlapping/clean circular badge).
+  * Channel Title, @handle, Subscriber count, total videos.
+  * Subscribe / Subscribed action button.
+- Tabs:
+  * "Videos" (Sorted by latest uploads - instantly fetches latest videos via Piped API).
+  * "Playlists" / "About" description.
+- Video grid/list showing latest uploads with durations and view counts.
+
+--------------------------------------------------------------------------------
+STEP 8: SUBSCRIPTIONS FEED, POLISH & PRODUCTION READINESS
+--------------------------------------------------------------------------------
+- Subscriptions Tab:
+  * Top horizontal circular avatar stories of all subscribed channels.
+  * Combined chronological latest videos feed from all subscribed creators.
+  * Empty state: "No subscriptions yet. Discover channels on Home and hit Subscribe!"
+- Performance & Polish:
+  * CachedNetworkImage for instant thumbnail loading without lag.
+  * Smooth animations, transitions, and status bar coloring.
+  * Network error boundaries and retry buttons.
+================================================================================
+
